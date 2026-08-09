@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Олімпійський день | AR</title>
+    <!-- бібліотека для генерації QR -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; user-select:none; -webkit-user-select:none; }
+        body { overflow:hidden; background:#000; font-family:'Courier New',monospace; }
+
+        #video  { position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; z-index:0; }
+        #canvas { position:absolute; top:0; left:0; width:100%; height:100%; z-index:1; }
+
+        /* ═══ TOP BAR ═══ */
+        .top-bar {
+            position:absolute;
+            top:max(16px, env(safe-area-inset-top,16px));
+            left:14px; right:14px;
+            display:flex; justify-content:space-between;
+            z-index:200; gap:8px;
+        }
+        .top-bar button {
+            background:rgba(0,0,0,0.85);
+            border:1.5px solid #0085c7; color:#0085c7;
+            padding:7px 14px; border-radius:40px;
+            font-weight:bold; font-family:monospace; font-size:13px;
+            cursor:pointer; -webkit-tap-highlight-color:transparent;
+            touch-action:manipulation;
+        }
+        .top-bar button:active { opacity:.7; }
+
+        /* ═══ LOADING ═══ */
+        #loading {
+            position:fixed; inset:0; background:#000;
+            display:none; flex-direction:column;
+            align-items:center; justify-content:center;
+            z-index:1000; color:#0085c7; font-family:monospace; padding:24px;
+        }
+        #loading-title {
+            font-size:1.4rem; font-weight:bold; letter-spacing:.1em;
+            margin-bottom:32px; text-shadow:0 0 16px #0085c7;
+        }
+        .load-steps { width:100%; max-width:260px; }
+        .load-step {
+            display:flex; align-items:center; gap:12px;
+            padding:8px 0; font-size:14px; color:rgba(0,133,199,.3);
+            transition:color .4s;
+        }
+        .load-step .si { font-size:18px; width:24px; text-align:center; }
+        .load-step.active { color:#ffdd88; }
+        .load-step.done   { color:#0085c7; }
+        .pbwrap { width:100%; max-width:260px; background:rgba(0,133,199,.12); border-radius:4px; height:4px; margin-top:20px; overflow:hidden; }
+        .pb { height:100%; background:#0085c7; width:0%; transition:width .5s ease; box-shadow:0 0 8px #0085c7; }
+
+        /* ═══ SETUP SCREEN ═══ */
+        #setup-screen {
+            position:fixed; inset:0; background:#000;
+            display:flex; flex-direction:column;
+            align-items:center; justify-content:center;
+            z-index:999; color:#fff; font-family:monospace; padding:24px;
+            overflow-y:auto;
+        }
+        #setup-screen h2 {
+            color:#0085c7; font-size:1.8rem; margin-bottom:12px;
+            text-shadow:0 0 16px #0085c7;
+        }
+        #setup-screen p {
+            color:rgba(255,255,255,0.7); font-size:14px; text-align:center;
+            margin-bottom:28px; max-width:320px; line-height:1.5;
+        }
+        #video-url {
+            background:rgba(0,133,199,0.1); border:1.5px solid #0085c7;
+            color:#fff; padding:12px 16px; border-radius:40px;
+            width:100%; max-width:400px; font-size:14px; outline:none;
+            margin-bottom:16px; font-family:monospace;
+        }
+        #video-url::placeholder { color:rgba(0,133,199,0.5); }
+        .setup-buttons {
+            display:flex; gap:12px; flex-wrap:wrap; justify-content:center;
+            margin-bottom:16px;
+        }
+        .setup-buttons button {
+            background:rgba(0,0,0,0.85);
+            border:1.5px solid #0085c7; color:#0085c7;
+            padding:12px 24px; border-radius:40px;
+            font-weight:bold; font-family:monospace; font-size:14px;
+            cursor:pointer; -webkit-tap-highlight-color:transparent;
+            touch-action:manipulation;
+        }
+        .setup-buttons button.primary {
+            background:linear-gradient(135deg,#0085c7,#005f8a);
+            border:none; color:#fff;
+        }
+        #upload-video-btn {
+            background:rgba(0,0,0,0.85);
+            border:1.5px dashed #0085c7; color:#0085c7;
+            padding:12px 24px; border-radius:40px;
+            font-weight:bold; font-family:monospace; font-size:14px;
+            cursor:pointer; margin-bottom:8px;
+        }
+        #upload-status {
+            font-size:13px; color:#ffdd88; margin-bottom:12px; min-height:20px;
+        }
+        #qrcode-container {
+            margin-top:12px;
+            padding:16px; background:white; border-radius:16px;
+            display:none;
+        }
+        #copy-link {
+            margin-top:12px; color:#ffdd88; font-size:13px;
+            cursor:pointer; text-decoration:underline;
+        }
+
+        /* ═══ ПОЕТАПНИЙ ONBOARDING ═══ */
+        #onboarding {
+            position:absolute; bottom:max(14px,env(safe-area-inset-bottom,14px));
+            left:14px; right:14px; z-index:200;
+            display:none; flex-direction:column; gap:10px;
+            pointer-events:none;
+        }
+        #step-dots {
+            display:flex; justify-content:center; gap:8px; margin-bottom:2px;
+        }
+        .sdot {
+            width:28px; height:6px; border-radius:3px;
+            background:rgba(255,255,255,.2); transition:background .4s, width .4s;
+        }
+        .sdot.active { background:#0085c7; width:44px; box-shadow:0 0 8px #0085c7; }
+        .sdot.done   { background:rgba(0,133,199,.5); }
+
+        #step-card {
+            background:rgba(0,0,0,.82);
+            border:1.5px solid rgba(0,133,199,.5);
+            border-radius:20px; padding:14px 18px;
+            display:flex; align-items:center; gap:14px;
+        }
+        #step-emoji {
+            font-size:52px; line-height:1;
+            animation:emojiPop 1.6s ease-in-out infinite;
+            flex-shrink:0;
+        }
+        @keyframes emojiPop {
+            0%,100%{transform:scale(1);}
+            50%{transform:scale(1.14);}
+        }
+        #step-body { flex:1; }
+        #step-num  { font-size:11px; color:rgba(0,133,199,.6); letter-spacing:.08em; margin-bottom:3px; }
+        #step-title{ font-size:17px; font-weight:bold; color:#fff; line-height:1.3; }
+        #step-sub  { font-size:13px; color:rgba(255,220,100,.85); margin-top:4px; line-height:1.4; }
+
+        #step-ring {
+            position:relative; width:68px; height:68px; flex-shrink:0;
+        }
+        #step-ring canvas { position:absolute; top:0; left:0; }
+        #step-ring-emoji { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:34px; line-height:1; }
+
+        /* ═══ AUTOPLAY OVERLAY ═══ */
+        #autoplay-overlay {
+            position:fixed; inset:0; background:rgba(0,0,0,.78);
+            display:none; align-items:center; justify-content:center;
+            z-index:500; flex-direction:column; gap:18px;
+        }
+        #autoplay-overlay.visible { display:flex; }
+        #autoplay-lbl { color:rgba(255,255,255,.9); font-family:monospace; font-size:16px; text-align:center; padding:0 28px; line-height:1.6; }
+        #autoplay-btn {
+            background:linear-gradient(135deg,#0085c7,#005f8a);
+            color:#fff; font-size:20px; font-weight:bold;
+            padding:18px 40px; border-radius:60px; border:none;
+            cursor:pointer; font-family:monospace;
+            box-shadow:0 0 30px rgba(0,133,199,.6);
+            -webkit-tap-highlight-color:transparent;
+            touch-action:manipulation;
+        }
+
+        /* ═══ TASK BUTTON ═══ */
+        #task-btn {
+            position:absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background:linear-gradient(135deg,#0085c7,#005f8a);
+            color:#fff; font-size:18px; font-weight:bold;
+            padding:14px 30px; border-radius:60px; border:none;
+            z-index:300; display:none; cursor:pointer;
+            font-family:monospace; white-space:nowrap;
+            -webkit-tap-highlight-color:transparent;
+            touch-action:manipulation;
+            animation:taskPulse 2s ease-in-out infinite;
+        }
+        @keyframes taskPulse {
+            0%,100%{box-shadow:0 0 20px rgba(0,133,199,.5);}
+            50%    {box-shadow:0 0 40px rgba(0,133,199,.9);}
+        }
+
+        @media(max-width:480px){
+            .top-bar button{padding:6px 11px;font-size:12px;}
+            #step-title{font-size:15px;}
+            #task-btn{font-size:16px;padding:12px 22px;}
+            #setup-screen h2{font-size:1.4rem;}
+        }
+    </style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+
+<!-- Екран налаштування (показується, якщо немає ?video=...) -->
+<div id="setup-screen">
+    <h2>🥇 Олімпійський день</h2>
+    <p>Вставте пряме посилання на .mp4 відео або завантажте своє (до 60 секунд)</p>
+    <input type="url" id="video-url" placeholder="https://example.com/your-video.mp4" />
+    <input type="file" id="video-file-input" accept="video/mp4" style="display:none;" />
+    <button id="upload-video-btn">📤 Завантажити відео з пристрою</button>
+    <p id="upload-status"></p>
+    <div class="setup-buttons">
+        <button id="go-ar-btn" class="primary">✨ Запустити AR</button>
+        <button id="show-qr-btn">📱 Показати QR</button>
+    </div>
+    <div id="qrcode-container"></div>
+    <div id="copy-link" style="display:none;">📋 Скопіювати посилання</div>
+</div>
+
+<div id="loading">
+    <div id="loading-title">🥇 Олімпійський день</div>
+    <div class="load-steps">
+        <div class="load-step" id="ls-model"><span class="si">🧠</span><span>Завантажую модель руки...</span></div>
+        <div class="load-step" id="ls-cam"  ><span class="si">📷</span><span>Вмикаю камеру...</span></div>
+        <div class="load-step" id="ls-scene"><span class="si">✨</span><span>Готую голограму...</span></div>
+    </div>
+    <div class="pbwrap"><div class="pb" id="pb"></div></div>
+</div>
+
+<div class="top-bar">
+    <button id="camera-toggle">📷 Камера</button>
+    <button id="reset">⟳ Скинути</button>
+</div>
+
+<div id="autoplay-overlay">
+    <div id="autoplay-lbl">✨ Олімпійські кільця активовані!<br>Торкнись, щоб запустити відео</div>
+    <button id="autoplay-btn">▶ ЗАПУСТИТИ</button>
+</div>
+
+<button id="task-btn">✨ Мерщій шукати Олесю Олександрівну </button>
+
+<div id="onboarding">
+    <div id="step-dots"></div>
+    <div id="step-card">
+        <div id="step-ring">
+            <canvas id="ring-canvas" width="68" height="68"></canvas>
+            <div id="step-ring-emoji">🖐️</div>
+        </div>
+        <div id="step-body">
+            <div id="step-num">КРОК 1 З 2</div>
+            <div id="step-title">Покажи долоню</div>
+            <div id="step-sub">Підніми руку перед камерою</div>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+import * as THREE from 'https://unpkg.com/three@0.158.0/build/three.module.js';
+import { FilesetResolver, HandLandmarker }
+    from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm';
+
+/* ── ОТРИМАННЯ ПАРАМЕТРА ?video=... ── */
+function getVideoParam() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('video') || '';
+}
+
+/* ═══════════════════════════════════════════
+   НАЛАШТУВАННЯ CLOUDINARY (ВАЖЛИВО!)
+   Замініть на свої реальні значення:
+   - CLOUD_NAME – назва вашої хмари Cloudinary
+   - UPLOAD_PRESET – unsigned upload preset
+   Створіть preset у Cloudinary:
+   Settings → Upload → Upload presets → Add upload preset
+   (Signing mode: Unsigned, Allowed formats: mp4)
+   ═══════════════════════════════════════════ */
+const CLOUDINARY_CLOUD_NAME = 'ccauoh1c';   // ← ЗАМІНИТИ!
+const CLOUDINARY_UPLOAD_PRESET = 'armaksimilian'; // ← ЗАМІНИТИ!
+
+/* Якщо параметра немає – показуємо екран налаштування */
+if (!getVideoParam()) {
+    document.getElementById('setup-screen').style.display = 'flex';
+    const urlInput = document.getElementById('video-url');
+    const goARBtn = document.getElementById('go-ar-btn');
+    const showQrBtn = document.getElementById('show-qr-btn');
+    const qrContainer = document.getElementById('qrcode-container');
+    const copyLink = document.getElementById('copy-link');
+    const uploadBtn = document.getElementById('upload-video-btn');
+    const fileInput = document.getElementById('video-file-input');
+    const uploadStatus = document.getElementById('upload-status');
+
+    let currentQrUrl = '';
+
+    function updateQR(url) {
+        qrContainer.innerHTML = '';
+        if (url) {
+            new QRCode(qrContainer, {
+                text: url,
+                width: 200,
+                height: 200,
+                colorDark: "#000000",
+                colorLight: "#ffffff",
+            });
+            qrContainer.style.display = 'block';
+            copyLink.style.display = 'block';
+            currentQrUrl = url;
+        } else {
+            qrContainer.style.display = 'none';
+            copyLink.style.display = 'none';
+        }
+    }
+
+    // Обробник завантаження відео через Cloudinary
+    uploadBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        // Перевірка розширення
+        if (!file.name.toLowerCase().endsWith('.mp4')) {
+            uploadStatus.textContent = '❌ Тільки .mp4 файли!';
+            return;
+        }
+
+        // Перевірка тривалості (до 60 секунд)
+        uploadStatus.textContent = '⏳ Перевірка відео...';
+        const tempVideo = document.createElement('video');
+        tempVideo.preload = 'metadata';
+        tempVideo.src = URL.createObjectURL(file);
+        await new Promise(resolve => tempVideo.addEventListener('loadedmetadata', resolve));
+        if (tempVideo.duration > 60) {
+            uploadStatus.textContent = '❌ Відео довше 60 секунд. Обріжте його до 1 хвилини.';
+            URL.revokeObjectURL(tempVideo.src);
+            return;
+        }
+        URL.revokeObjectURL(tempVideo.src);
+
+        // Завантаження на Cloudinary
+        uploadStatus.textContent = '⏳ Завантаження на сервер...';
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+
+        try {
+            const response = await fetch(
+                `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/video/upload`,
+                { method: 'POST', body: formData }
+            );
+            const data = await response.json();
+            if (data.secure_url) {
+                urlInput.value = data.secure_url;   // підставляємо посилання
+                uploadStatus.textContent = '✅ Відео успішно завантажено!';
+                // Одразу показуємо QR (можна забрати, якщо хочете вручну)
+                updateQR(data.secure_url);
+            } else {
+                uploadStatus.textContent = '❌ Помилка: ' + (data.error?.message || 'Невідома помилка');
+            }
+        } catch (err) {
+            uploadStatus.textContent = '❌ Не вдалося завантажити: ' + err.message;
+        }
+    });
+
+    goARBtn.addEventListener('click', () => {
+        const url = urlInput.value.trim();
+        if (!url) {
+            alert('Будь ласка, вставте посилання або завантажте відео.');
+            return;
+        }
+        const newUrl = window.location.origin + window.location.pathname + '?video=' + encodeURIComponent(url);
+        window.location.href = newUrl;
+    });
+
+    showQrBtn.addEventListener('click', () => {
+        const url = urlInput.value.trim();
+        if (!url) {
+            alert('Спочатку введіть посилання або завантажте відео.');
+            return;
+        }
+        const fullUrl = window.location.origin + window.location.pathname + '?video=' + encodeURIComponent(url);
+        updateQR(fullUrl);
+    });
+
+    copyLink.addEventListener('click', () => {
+        if (currentQrUrl) {
+            navigator.clipboard.writeText(currentQrUrl).then(() => {
+                copyLink.textContent = '✅ Посилання скопійовано!';
+                setTimeout(() => { copyLink.textContent = '📋 Скопіювати посилання'; }, 2000);
+            });
+        }
+    });
+
+    // зупиняємо виконання решти скрипта
+    throw new Error('setup mode');
+}
+
+/* ── ЯКЩО ПАРАМЕТР Є – ЗАПУСКАЄМО AR ── */
+const CFG = {
+    ringRadius       : 0.075,
+    ringTube         : 0.022,
+    handOffsetY      : 0.02,
+    hologramOffsetY  : 0.40,
+    hologramScale    : 1.1,
+    rotationSpeed    : 0.001,
+    glowIdle         : 0.3,
+    glowActive       : 1.2,
+    rotSmoothing     : 0.15,
+    posSmoothing     : 0.12,
+    videoSrc         : getVideoParam(),
+    telegramUrl      : 'https://lessa2332.github.io/2506braslet/',
+};
+
+/* ── DOM ── */
+const videoEl        = document.getElementById('video');
+const canvasEl       = document.getElementById('canvas');
+const loadingEl      = document.getElementById('loading');
+const autoplayOverlay= document.getElementById('autoplay-overlay');
+const autoplayBtn    = document.getElementById('autoplay-btn');
+const resetBtn       = document.getElementById('reset');
+const cameraToggleBtn= document.getElementById('camera-toggle');
+const taskBtn        = document.getElementById('task-btn');
+
+/* ═══ ONBOARDING ═══ */
+const STEPS = [
+    { emoji:'🖐️', num:'КРОК 1 З 2', title:'Покажи долоню', sub:'Підніми руку перед камерою' },
+    { emoji:'👌', num:'КРОК 2 З 2', title:'Покажи знак OK', sub:'З\'єднай великий та вказівний пальці у кільце' },
+    { emoji:'✨', num:'ГОТОВО!',     title:'Олімпійські кільця активовано!', sub:'Дивись на голограму!' },
+];
+let currentStep = 0;
+
+const stepDotsEl      = document.getElementById('step-dots');
+const stepRingEmoji   = document.getElementById('step-ring-emoji');
+const stepNum         = document.getElementById('step-num');
+const stepTitle       = document.getElementById('step-title');
+const stepSub         = document.getElementById('step-sub');
+const ringCanvas      = document.getElementById('ring-canvas');
+const ringCtx         = ringCanvas.getContext('2d');
+const onboardingEl    = document.getElementById('onboarding');
+
+STEPS.forEach((_,i)=>{
+    const d = document.createElement('div');
+    d.className = 'sdot' + (i===0?' active':'');
+    d.id = 'dot-'+i;
+    stepDotsEl.appendChild(d);
+});
+
+function showStep(idx){
+    if(idx >= STEPS.length){ onboardingEl.style.display='none'; return; }
+    currentStep = idx;
+    const s = STEPS[idx];
+    stepRingEmoji.textContent = s.emoji;
+    stepNum.textContent   = s.num;
+    stepTitle.textContent = s.title;
+    stepSub.textContent   = s.sub;
+    STEPS.forEach((_,i)=>{
+        const d = document.getElementById('dot-'+i);
+        d.className = 'sdot' + (i<idx?' done':i===idx?' active':'');
+    });
+    ringProgress = 0;
+}
+
+let ringProgress  = 0;
+let ringTarget    = 0;
+function drawRing(){
+    const s=68, r=30, cx=34, cy=34;
+    ringCtx.clearRect(0,0,s,s);
+    ringCtx.beginPath();
+    ringCtx.arc(cx,cy,r,0,Math.PI*2);
+    ringCtx.strokeStyle='rgba(0,133,199,.15)';
+    ringCtx.lineWidth=4;
+    ringCtx.stroke();
+    if(ringProgress>0.01){
+        ringCtx.beginPath();
+        ringCtx.arc(cx,cy,r,-Math.PI/2,-Math.PI/2+Math.PI*2*ringProgress);
+        ringCtx.strokeStyle='#0085c7';
+        ringCtx.lineWidth=4;
+        ringCtx.lineCap='round';
+        ringCtx.stroke();
+    }
+}
+
+/* ═══ THREE.JS ═══ */
+const scene    = new THREE.Scene();
+const cam3     = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 1000);
+cam3.position.set(0,0,3.2);
+const renderer = new THREE.WebGLRenderer({canvas:canvasEl, alpha:true, antialias:false});
+renderer.setClearColor(0,0);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+
+window.addEventListener('resize',()=>{
+    cam3.aspect = innerWidth/innerHeight;
+    cam3.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight);
+});
+
+/* ═══ ОЛІМПІЙСЬКІ КІЛЬЦЯ ═══ */
+const ringsGroup = new THREE.Group();
+scene.add(ringsGroup);
+
+const RING_COLORS = [
+    { color: 0x0085c7, emissive: 0x0085c7, label: 'blue' },
+    { color: 0xf4c300, emissive: 0xf4c300, label: 'yellow' },
+    { color: 0x000000, emissive: 0x333333, label: 'black' },
+    { color: 0x009f3d, emissive: 0x009f3d, label: 'green' },
+    { color: 0xdf0024, emissive: 0xdf0024, label: 'red' }
+];
+
+const RING_POSITIONS = [
+    { x: -0.20, y:  0.08, z:  0.015 },
+    { x: -0.10, y: -0.08, z:  0.005 },
+    { x:  0.00, y:  0.08, z:  0.000 },
+    { x:  0.10, y: -0.08, z: -0.005 },
+    { x:  0.20, y:  0.08, z: -0.015 }
+];
+
+const ringMeshes = [];
+const ringMaterials = [];
+
+RING_COLORS.forEach((c, i) => {
+    const geo = new THREE.TorusGeometry(CFG.ringRadius, CFG.ringTube, 48, 52, Math.PI * 2);
+    const mat = new THREE.MeshStandardMaterial({
+        color: c.color,
+        emissive: c.emissive,
+        emissiveIntensity: CFG.glowIdle,
+        metalness: 0.6,
+        roughness: 0.3,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    const pos = RING_POSITIONS[i];
+    mesh.position.set(pos.x, pos.y, pos.z);
+    mesh.rotation.x = Math.PI * 0.02;
+    mesh.rotation.z = Math.PI * 0.02;
+    ringsGroup.add(mesh);
+    ringMeshes.push(mesh);
+    ringMaterials.push(mat);
+});
+
+const ringLight = new THREE.PointLight(0x0085c7, CFG.glowIdle, 2);
+ringsGroup.add(ringLight);
+
+const fillLight = new THREE.DirectionalLight(0x4488ff, 0.5);
+fillLight.position.set(1, 1, 1);
+ringsGroup.add(fillLight);
+
+/* ═══ ГОЛОГРАМА (відео) ═══ */
+const hologramGroup = new THREE.Group();
+scene.add(hologramGroup);
+
+const hVideo = document.createElement('video');
+hVideo.setAttribute('playsinline','');
+hVideo.setAttribute('crossorigin','anonymous');
+hVideo.muted   = true;
+hVideo.loop    = false;
+hVideo.preload = 'auto';
+hVideo.src     = CFG.videoSrc;
+hVideo.load();
+
+const vTex = new THREE.VideoTexture(hVideo);
+vTex.minFilter = THREE.LinearFilter;
+vTex.magFilter = THREE.LinearFilter;
+
+const vShader = `varying vec2 vUv;
+void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`;
+
+const fShader = `
+uniform sampler2D uTex;
+uniform float uTime;
+uniform float uPlaying;
+varying vec2 vUv;
+
+vec3 rgb2hsv(vec3 c){
+    vec4 K=vec4(0.,-1./3.,2./3.,-1.);
+    vec4 p=mix(vec4(c.bg,K.wz),vec4(c.gb,K.xy),step(c.b,c.g));
+    vec4 q=mix(vec4(p.xyw,c.r),vec4(c.r,p.yzx),step(p.x,c.r));
+    float d=q.x-min(q.w,q.y);
+    float e=1e-10;
+    return vec3(abs(q.z+(q.w-q.y)/(6.*d+e)),d/(q.x+e),q.x);
+}
+
+void main(){
+    if(uPlaying<0.5){ discard; }
+    vec4 col = texture2D(uTex, vUv);
+    vec3 hsv = rgb2hsv(col.rgb);
+    float hDeg = hsv.x * 360.0;
+    bool isChroma = (hDeg > 75.0 && hDeg < 170.0)
+                  && hsv.y > 0.24
+                  && hsv.z > 0.08;
+    if(isChroma) discard;
+    float edgeMask = 1.0;
+    if(hDeg > 70.0 && hDeg < 175.0 && hsv.y > 0.14 && hsv.z > 0.06){
+        float blend = smoothstep(0.14, 0.28, hsv.y);
+        edgeMask = 1.0 - blend;
+        if(edgeMask < 0.05) discard;
+    }
+    float dummy = uTime * 0.0;
+    gl_FragColor = vec4(col.rgb, edgeMask * 1.0 + dummy);
+}`;
+
+const hMat = new THREE.ShaderMaterial({
+    uniforms:{
+        uTex    :{ value: vTex },
+        uTime   :{ value: 0 },
+        uPlaying:{ value: 0 },
+    },
+    vertexShader:vShader, fragmentShader:fShader,
+    transparent:true, side:THREE.DoubleSide, depthWrite:false,
+});
+const hPlane = new THREE.Mesh(new THREE.PlaneGeometry(CFG.hologramScale, CFG.hologramScale*.75), hMat);
+hPlane.position.y = CFG.hologramOffsetY;
+hologramGroup.add(hPlane);
+
+hVideo.addEventListener('loadedmetadata',()=>{
+    const asp = hVideo.videoWidth / hVideo.videoHeight;
+    hPlane.scale.set(CFG.hologramScale, CFG.hologramScale/asp, 1);
+});
+
+/* Частинки навколо голограми */
+const particles = new THREE.Group();
+hologramGroup.add(particles);
+for(let i=0;i<20;i++){
+    const p = new THREE.Mesh(
+        new THREE.SphereGeometry(.008,6,6),
+        new THREE.MeshStandardMaterial({color:0x44aaff,emissive:0x0085c7,emissiveIntensity:.5})
+    );
+    p.userData={ angle:(i/20)*Math.PI*2, radius:.65, speed:.3+Math.random()*.5 };
+    particles.add(p);
+}
+
+/* ═══ ВІДЕО ЛОГІКА ═══ */
+let videoPlayed    = false;
+let hologramActive = false;
+let taskBtnShown   = false;
+
+function showTaskBtn(){ if(!taskBtnShown){ taskBtn.style.display='block'; taskBtnShown=true; } }
+function hideTaskBtn(){ taskBtn.style.display='none'; taskBtnShown=false; }
+
+function resetVideoState(){
+    videoPlayed=false;
+    hVideo.pause();
+    hVideo.currentTime=0;
+    hMat.uniforms.uPlaying.value=0;
+    hideTaskBtn();
+    autoplayOverlay.classList.remove('visible');
+}
+
+hVideo.addEventListener('ended',()=>{
+    if(!hologramActive) return;
+    hMat.uniforms.uPlaying.value=0;
+    showTaskBtn();
+});
+
+autoplayBtn.addEventListener('click',()=>{
+    autoplayOverlay.classList.remove('visible');
+    hVideo.muted=false;
+    hVideo.play().then(()=>{
+        videoPlayed=true;
+        hMat.uniforms.uPlaying.value=1;
+    }).catch(()=>{
+        hVideo.muted=true;
+        hVideo.play().then(()=>{
+            videoPlayed=true;
+            hMat.uniforms.uPlaying.value=1;
+        }).catch(()=>{});
+    });
+});
+
+function tryAutoplay(){
+    hVideo.muted=false;
+    hVideo.play().then(()=>{
+        videoPlayed=true;
+        hMat.uniforms.uPlaying.value=1;
+    }).catch(()=>{
+        hVideo.muted=true;
+        hVideo.play().then(()=>{
+            videoPlayed=true;
+            hMat.uniforms.uPlaying.value=1;
+        }).catch(()=>{});
+        autoplayOverlay.classList.add('visible');
+    });
+}
+
+function activateHologram(){
+    if(hologramActive||videoPlayed) return;
+    hologramActive=true;
+    hologramGroup.visible=true;
+    showStep(2);
+    if('vibrate' in navigator) navigator.vibrate(100);
+    tryAutoplay();
+}
+
+/* ═══ ДЗЕРКАЛЮВАННЯ ═══ */
+let facingMode='user';
+function updateVideoMirror() {
+    videoEl.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
+}
+
+/* ═══ MEDIAPIPE ═══ */
+let handLandmarker=null;
+
+function getDelegate(){
+    try{ return document.createElement('canvas').getContext('webgl2')?'GPU':'CPU'; }catch{ return 'CPU'; }
+}
+
+async function initMP(){
+    document.getElementById('ls-model').classList.add('active');
+    setPb(10);
+    const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm');
+    setPb(40);
+    handLandmarker = await HandLandmarker.createFromOptions(vision,{
+        baseOptions:{ modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate:getDelegate() },
+        runningMode:'VIDEO', numHands:1,
+    });
+    setPb(60);
+    document.getElementById('ls-model').classList.replace('active','done');
+}
+
+async function startCamera(){
+    document.getElementById('ls-cam').classList.add('active');
+    if(videoEl.srcObject) videoEl.srcObject.getTracks().forEach(t=>t.stop());
+    const tryC=async c=>{
+        const s=await navigator.mediaDevices.getUserMedia(c);
+        videoEl.srcObject=s; await videoEl.play(); return s;
+    };
+    try{ await tryC({video:{facingMode:{exact:facingMode},width:{ideal:1280},height:{ideal:720}}}); }
+    catch{ try{ await tryC({video:{facingMode,width:{ideal:1280},height:{ideal:720}}}); }
+           catch{ try{ await tryC({video:true}); }
+                  catch{ document.getElementById('step-sub').textContent='❌ Немає доступу до камери'; return false; } } }
+    await new Promise(r=>{ if(videoEl.readyState>=2)r(); else videoEl.addEventListener('loadedmetadata',r,{once:true}); });
+    cam3.aspect=innerWidth/innerHeight;
+    cam3.updateProjectionMatrix();
+    renderer.setSize(innerWidth,innerHeight);
+    document.getElementById('ls-cam').classList.replace('active','done');
+    setPb(80);
+    updateVideoMirror();
+    return true;
+}
+
+/* ── DETECTION STATE ── */
+let handVisible=false, okState=false, lastOkState=false;
+let rotX=0, rotZ=0;
+let okHoldTime=0;
+const OK_HOLD_MS=300;
+
+function getWristRot(lm,mirrored){
+    const dx=(mirrored?-1:1)*(lm[5].x-lm[17].x), dy=lm[5].y-lm[17].y, dz=(lm[5].z||0)-(lm[17].z||0);
+    return{ x:Math.atan2(dz,Math.hypot(dx,dy))*.5, z:Math.atan2(dy,dx)+Math.PI/2 };
+}
+function getWristW(lm){
+    return Math.hypot(lm[0].x-lm[17].x,lm[0].y-lm[17].y,(lm[0].z||0)-(lm[17].z||0))*5.5;
+}
+
+function detectionLoop(){
+    if(!handLandmarker||videoEl.readyState<2||!videoEl.videoWidth){requestAnimationFrame(detectionLoop);return;}
+    const now=performance.now();
+    const res=handLandmarker.detectForVideo(videoEl,now);
+    const mir=facingMode==='user';
+
+    if(res.landmarks&&res.landmarks.length>0){
+        const lm=res.landmarks[0];
+
+        if(!handVisible){
+            handVisible=true;
+            if(!hologramActive&&!videoPlayed) showStep(1);
+        }
+
+        const wc={ x:(lm[0].x+lm[17].x)/2, y:(lm[0].y+lm[17].y)/2, z:((lm[0].z||0)+(lm[17].z||0))/2 };
+        const fv={ x:wc.x-(lm[5].x+lm[9].x+lm[13].x+lm[17].x)/4, y:wc.y-(lm[5].y+lm[9].y+lm[13].y+lm[17].y)/4, z:0 };
+        const fl=Math.hypot(fv.x,fv.y)||1;
+        const rawX=(wc.x-.5)*2.6; const tx=(mir?-rawX:rawX)+(fv.x/fl)*.045;
+        const ty=(0.5-wc.y)*2.0+CFG.handOffsetY+(fv.y/fl)*.045;
+        ringsGroup.position.x+=(tx-ringsGroup.position.x)*CFG.posSmoothing;
+        ringsGroup.position.y+=(ty-ringsGroup.position.y)*CFG.posSmoothing;
+        ringsGroup.position.z=(wc.z||0)*.6+.08;
+        hologramGroup.position.copy(ringsGroup.position);
+        hologramGroup.position.y+=CFG.hologramOffsetY;
+
+        const sc = Math.min(Math.max(getWristW(lm)/(CFG.ringRadius*1.4), 0.6), 1.6);
+        ringsGroup.scale.set(sc, sc, sc);
+
+        const rot=getWristRot(lm,mir);
+        rotX+=(rot.x-rotX)*CFG.rotSmoothing;
+        rotZ+=(rot.z-rotZ)*CFG.rotSmoothing;
+        ringsGroup.rotation.set(rotX, 0, rotZ);
+        ringsGroup.visible=true;
+
+        /* OK-SIGN DETECTION */
+        const palmSz=Math.hypot(lm[0].x-lm[9].x,lm[0].y-lm[9].y)||.001;
+        const okD=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
+        const circle = okD < palmSz*.5;
+        const ext3   = [12,16,20].filter(t=>lm[t].y < lm[t-2].y-.008).length>=2;
+        okState = circle && ext3;
+
+        if(okState && !hologramActive && !videoPlayed){
+            okHoldTime = Math.min(okHoldTime+16, OK_HOLD_MS);
+            ringTarget = okHoldTime/OK_HOLD_MS;
+        } else {
+            okHoldTime=0; ringTarget=0;
+        }
+
+        if(okState && okHoldTime>=OK_HOLD_MS && !hologramActive && !videoPlayed){
+            activateHologram();
+            okHoldTime=0; ringTarget=0;
+        }
+        lastOkState=okState;
+
+    } else {
+        if(handVisible){
+            handVisible=false; okState=false; lastOkState=false; okHoldTime=0; ringTarget=0;
+            ringsGroup.visible=false;
+            if(!hologramActive){ hologramGroup.visible=false; showStep(0); }
+        }
+    }
+    requestAnimationFrame(detectionLoop);
+}
+
+/* ═══ RENDER LOOP ═══ */
+function animate(){
+    requestAnimationFrame(animate);
+    const t=performance.now()/1000;
+
+    ringProgress+=(ringTarget-ringProgress)*.15;
+    drawRing();
+
+    if(ringsGroup.visible){
+        ringMeshes.forEach((mesh, i) => {
+            mesh.rotation.x += CFG.rotationSpeed * (i % 2 === 0 ? 0.7 : -0.7);
+            mesh.rotation.z += CFG.rotationSpeed * (i % 2 === 0 ? -0.5 : 0.5);
+        });
+        const tg = hologramActive ? CFG.glowActive : CFG.glowIdle;
+        ringMaterials.forEach(mat => {
+            mat.emissiveIntensity += (tg - mat.emissiveIntensity) * 0.08;
+        });
+        ringLight.intensity = ringMaterials[0].emissiveIntensity * 0.9;
+    }
+
+    if(hologramGroup.visible){
+        hMat.uniforms.uTime.value=t;
+        vTex.needsUpdate=true;
+        particles.children.forEach(p=>{
+            const a=t*p.userData.speed+p.userData.angle;
+            p.position.set(Math.cos(a)*p.userData.radius, Math.sin(a*2)*.05, Math.sin(a)*p.userData.radius);
+        });
+    }
+    renderer.render(scene,cam3);
+}
+
+/* ═══ КНОПКИ ═══ */
+cameraToggleBtn.addEventListener('click',async()=>{
+    facingMode=facingMode==='environment'?'user':'environment';
+    await startCamera();
+    updateVideoMirror();
+});
+
+resetBtn.addEventListener('click',()=>{
+    handVisible=false; hologramActive=false;
+    okState=false; lastOkState=false; okHoldTime=0; ringTarget=0;
+    ringsGroup.visible=false; hologramGroup.visible=false;
+    resetVideoState();
+    showStep(0);
+});
+
+taskBtn.addEventListener('click',()=>window.open(CFG.telegramUrl,'_blank'));
+
+/* ═══ CLEANUP ═══ */
+window.addEventListener('pagehide',()=>{
+    vTex.dispose(); hMat.dispose();
+    ringMeshes.forEach(m=>{ m.geometry.dispose(); m.material.dispose(); });
+    renderer.dispose();
+});
+
+/* ═══ INIT ═══ */
+function setPb(v){ document.getElementById('pb').style.width=v+'%'; }
+
+async function initAR(){
+    try{
+        loadingEl.style.display = 'flex';
+        onboardingEl.style.display = 'flex';
+        await initMP();
+        document.getElementById('ls-scene').classList.add('active');
+        const ok=await startCamera();
+        if(!ok) return;
+        setPb(95);
+        ringsGroup.visible=false; hologramGroup.visible=false;
+        document.getElementById('ls-scene').classList.replace('active','done');
+        setPb(100);
+        await new Promise(r=>setTimeout(r,350));
+        loadingEl.style.display='none';
+        showStep(0);
+        animate();
+        detectionLoop();
+    }catch(e){
+        console.error(e);
+        loadingEl.innerHTML='<div style="color:#f44;font-family:monospace;text-align:center;padding:24px">❌ Помилка завантаження.<br>Оновіть сторінку.</div>';
+    }
+}
+
+initAR();
+</script>
+</body>
+</html>

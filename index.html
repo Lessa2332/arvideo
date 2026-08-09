@@ -374,10 +374,13 @@ if (!getVideoParam()) {
         }
     });
 
-    throw new Error('setup mode');
+throw new Error('setup mode');
 }
 
 /* ═══════════ AR РЕЖИМ ═══════════ */
+// 🔥 ПРИМУСОВО ховаємо setup screen
+document.getElementById('setup-screen').style.display = 'none';
+
 const CFG = {
     ringRadius       : 0.075,
     ringTube         : 0.022,
@@ -690,6 +693,13 @@ async function initMP(){
 async function startCamera(){
     document.getElementById('ls-cam').classList.add('active');
     if(videoEl.srcObject) videoEl.srcObject.getTracks().forEach(t=>t.stop());
+    
+    // 🔥 ПЕРЕВІРКА: чи є getUserMedia
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        document.getElementById('step-sub').textContent = '❌ Браузер не підтримує камеру';
+        return false;
+    }
+    
     const tryC=async c=>{
         const s=await navigator.mediaDevices.getUserMedia(c);
         videoEl.srcObject=s; await videoEl.play(); return s;
@@ -697,7 +707,11 @@ async function startCamera(){
     try{ await tryC({video:{facingMode:{exact:facingMode},width:{ideal:1280},height:{ideal:720}}}); }
     catch{ try{ await tryC({video:{facingMode,width:{ideal:1280},height:{ideal:720}}}); }
            catch{ try{ await tryC({video:true}); }
-                  catch{ document.getElementById('step-sub').textContent='❌ Немає доступу до камери'; return false; } } }
+                  catch(e){ 
+                      console.error('Помилка камери:', e);
+                      document.getElementById('step-sub').textContent = '❌ Немає доступу до камери. Перевірте налаштування.';
+                      return false; 
+                  } } }
     await new Promise(r=>{ if(videoEl.readyState>=2)r(); else videoEl.addEventListener('loadedmetadata',r,{once:true}); });
     cam3.aspect=innerWidth/innerHeight;
     cam3.updateProjectionMatrix();
@@ -705,6 +719,7 @@ async function startCamera(){
     document.getElementById('ls-cam').classList.replace('active','done');
     setPb(80);
     updateVideoMirror();
+    console.log('✅ Камера успішно запущена!');
     return true;
 }
 
@@ -732,6 +747,7 @@ function detectionLoop(){
         if(!handVisible){
             handVisible=true;
             if(!hologramActive&&!videoPlayed) showStep(1);
+            console.log('🖐️ Руку виявлено!');
         }
         const wc={ x:(lm[0].x+lm[17].x)/2, y:(lm[0].y+lm[17].y)/2, z:((lm[0].z||0)+(lm[17].z||0))/2 };
         const fv={ x:wc.x-(lm[5].x+lm[9].x+lm[13].x+lm[17].x)/4, y:wc.y-(lm[5].y+lm[9].y+lm[13].y+lm[17].y)/4, z:0 };
@@ -764,6 +780,7 @@ function detectionLoop(){
             okHoldTime=0; ringTarget=0;
         }
         if(okState && okHoldTime>=OK_HOLD_MS && !hologramActive && !videoPlayed){
+            console.log('👌 Жест OK розпізнано! Запускаю голограму...');
             activateHologram();
             okHoldTime=0; ringTarget=0;
         }
@@ -830,12 +847,17 @@ function setPb(v){ document.getElementById('pb').style.width=v+'%'; }
 
 async function initAR(){
     try{
+        console.log('🚀 Запускаю AR...');
         loadingEl.style.display = 'flex';
         onboardingEl.style.display = 'flex';
         await initMP();
         document.getElementById('ls-scene').classList.add('active');
         const ok=await startCamera();
-        if(!ok) return;
+        if(!ok) {
+            console.error('❌ Камера не запустилась');
+            loadingEl.innerHTML='<div style="color:#f44;font-family:monospace;text-align:center;padding:24px">❌ Помилка камери.<br>Перевірте дозволи.</div>';
+            return;
+        }
         setPb(95);
         ringsGroup.visible=false; hologramGroup.visible=false;
         document.getElementById('ls-scene').classList.replace('active','done');
@@ -843,10 +865,11 @@ async function initAR(){
         await new Promise(r=>setTimeout(r,350));
         loadingEl.style.display='none';
         showStep(0);
+        console.log('✅ AR готовий! Покажіть долоню.');
         animate();
         detectionLoop();
     }catch(e){
-        console.error(e);
+        console.error('❌ Помилка:', e);
         loadingEl.innerHTML='<div style="color:#f44;font-family:monospace;text-align:center;padding:24px">❌ Помилка завантаження.<br>Оновіть сторінку.</div>';
     }
 }
